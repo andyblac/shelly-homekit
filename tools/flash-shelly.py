@@ -633,7 +633,7 @@ class Main:
     self.listener = None
 
   @staticmethod
-  def config(args, parser):
+  def parse_config(args, parser):
     if args.config and args.save_config:
       logger.info(f"Invalid option config or save-config not together.")
       parser.print_help()
@@ -725,7 +725,7 @@ class Main:
       logger.info(f"Version: {app_ver}")
       sys.exit(0)
 
-    args = self.config(args, parser)
+    args = self.parse_config(args, parser)
 
     if args.flash:
       action = 'flash'
