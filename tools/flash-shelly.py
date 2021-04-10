@@ -658,10 +658,12 @@ class Main:
       with open(config_file, "w") as file_object:
         config.write(file_object)
       sys.exit(0)
-    elif os.path.exists(config_file) and args.config:
+    elif os.path.exists(config_file):
       config.read(config_file)
       logger.debug(f"sections: {config.sections()}")
-      if not config.has_section(args.config):
+      if not args.config and config.has_section('default'):
+        args.config = 'default'
+      if args.config and not config.has_section(args.config):
         logger.info(f"Configuration '{args.config}' not found")
         sys.exit(1)
       logger.info(f'Reading configuration section {args.config} from {config_file}')
@@ -721,8 +723,7 @@ class Main:
       logger.info(f"Version: {app_ver}")
       sys.exit(0)
 
-    if args.config:
-      args = self.config(args, parser)
+    args = self.config(args, parser)
 
     if args.flash:
       action = 'flash'
