@@ -681,7 +681,7 @@ class Main:
       args = parser.parse_args()
       arg_list = vars(args)
       logger.trace(f"Loaded config: {arg_list}")
-      return args
+    return args
 
   def run_app(self):
     parser = argparse.ArgumentParser(prog='flash-shelly.py', fromfile_prefix_chars='@', description='Shelly HomeKit flashing script utility')
