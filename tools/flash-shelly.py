@@ -843,7 +843,7 @@ class Main:
 
     if message:
       logger.info(message)
-      parser.logger.trace_help()
+      parser.print_help()
       sys.exit(1)
 
     atexit.register(main.exit_app)
