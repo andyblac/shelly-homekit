@@ -68,7 +68,7 @@ static void GetInfoHandler(struct mg_rpc_request_info *ri, void *cb_arg,
   const char *wifi_ap_ip = mgos_sys_config_get_wifi_ap_ip();
 #endif
   std::string res = mgos::JSONPrintStringf(
-      "{device_id: %Q, name: %Q, app: %Q, model: %Q, stock_model: %Q, "
+      "{device_id: %Q, name: %Q, app: %Q, model: %Q, stock_fw_model: %Q, "
       "host: %Q, version: %Q, fw_build: %Q, uptime: %d, failsafe_mode: %B, "
 #ifdef MGOS_HAVE_WIFI
       "wifi_en: %B, wifi_ssid: %Q, wifi_pass: %Q, "
@@ -134,7 +134,7 @@ static void GetInfoFailsafeHandler(struct mg_rpc_request_info *ri, void *cb_arg,
                                    struct mg_str args) {
   mg_rpc_send_responsef(
       ri,
-      "{device_id: %Q, name: %Q, app: %Q, model: %Q, stock_model: %Q, "
+      "{device_id: %Q, name: %Q, app: %Q, model: %Q, stock_fw_model: %Q, "
       "host: %Q, version: %Q, fw_build: %Q, uptime: %d, failsafe_mode: %B}",
       mgos_sys_config_get_device_id(), mgos_sys_config_get_shelly_name(),
       MGOS_APP, CS_STRINGIFY_MACRO(PRODUCT_MODEL),
@@ -172,7 +172,7 @@ static void SetConfigHandler(struct mg_rpc_request_info *ri, void *cb_arg,
                &debug_en);
     mgos::ScopedCPtr name_owner(name_c);
 
-    if (sys_mode == 0 || sys_mode == 1 || sys_mode == 2) {
+    if (sys_mode >= 0 && sys_mode <= 4) {
       if (sys_mode != mgos_sys_config_get_shelly_mode()) {
         mgos_sys_config_set_shelly_mode(sys_mode);
         restart_required = true;
