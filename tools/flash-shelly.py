@@ -872,7 +872,7 @@ class Main:
       logger.info(f'flash-shelly version: {app_ver}')
       logger.info("Try to update your script, maybe the bug is already fixed!")
       exc_type, exc_value, exc_traceback = sys.exc_info()
-      traceback.logger.trace_exception(exc_type, exc_value, exc_traceback, file=sys.stdout)
+      traceback.trace_exception(exc_type, exc_value, exc_traceback, file=sys.stdout)
       logger.info(f'{NC}')
     except KeyboardInterrupt:
       main.stop_scan()
