@@ -89,7 +89,6 @@ import http.server
 import ipaddress
 import json
 import logging
-import netrc
 import os
 import platform
 import queue
@@ -225,7 +224,7 @@ class ServiceListener:
       logger.trace(f'[Device Scan] info: {info}')
       logger.trace(f'[Device Scan] properties: {properties}')
       logger.trace('')
-      (username, password) = main.get_netrc_login_info(host)
+      (username, password) = main.get_login_info(host)
       self.queue.put(Device(host, username, password, socket.inet_ntoa(info.addresses[0])))
 
   @staticmethod
@@ -316,12 +315,12 @@ class Device:
           fw_type = "stock"
           device_url = f'http://{self.wifi_ip}/settings'
         else:
-          fw_info = requests.get(f'http://{self.wifi_ip}/rpc/Shelly.GetInfo', auth=HTTPDigestAuth(self.username, self.password), timeout=3)
+          fw_info = requests.get(f'http://{self.wifi_ip}/rpc/Shelly.GetInfoExt', auth=HTTPDigestAuth(self.username, self.password), timeout=3)
+          device_url = f'http://{self.wifi_ip}/rpc/Shelly.GetInfoExt'
           if fw_info.status_code == 401:
-            self.info = 401
-            return 401
+            fw_info = requests.get(f'http://{self.wifi_ip}/rpc/Shelly.GetInfo', timeout=3)
+            device_url = f'http://{self.wifi_ip}/rpc/Shelly.GetInfo'
           fw_type = "homekit"
-          device_url = f'http://{self.wifi_ip}/rpc/Shelly.GetInfo'
       except Exception:
         pass
       if fw_info is not None and fw_info.status_code == 200:
@@ -569,8 +568,7 @@ class HomeKitDevice(Device):
     response = requests.post(url=f'http://{self.wifi_ip}/update', auth=HTTPDigestAuth(self.username, self.password), files=files)
     logger.trace(response.text)
     if response.status_code == 401:
-      logger.info(f"{self.friendly_host} is password protected.")
-      main.security_help()
+      main.security_help(self)
     return response
 
   def preform_reboot(self):
@@ -579,8 +577,7 @@ class HomeKitDevice(Device):
     response = requests.get(url=f'http://{self.wifi_ip}/rpc/SyS.Reboot', auth=HTTPDigestAuth(self.username, self.password))
     logger.trace(response.text)
     if response.status_code == 401:
-      logger.info(f"{self.friendly_host} is password protected.")
-      main.security_help()
+      main.security_help(self)
     return response
 
 
@@ -628,8 +625,7 @@ class StockDevice(Device):
         logger.info(f"flash failed")
     logger.trace(response.text)
     if response.status_code == 401:
-      logger.info(f"{self.friendly_host} is password protected.")
-      main.security_help()
+      main.security_help(self)
     return response
 
   def preform_reboot(self):
@@ -638,8 +634,7 @@ class StockDevice(Device):
     response = requests.get(url=f'http://{self.wifi_ip}/reboot', auth=(self.username, self.password))
     logger.trace(response.text)
     if response.status_code == 401:
-      logger.info(f"{self.friendly_host} is password protected.")
-      main.security_help()
+      main.security_help(self)
     return response
 
   def perform_mode_change(self, mode_color):
@@ -648,8 +643,7 @@ class StockDevice(Device):
     response = requests.get(url=f'http://{self.wifi_ip}/settings/?mode={mode_color}', auth=(self.username, self.password))
     logger.trace(response.text)
     if response.status_code == 401:
-      logger.info(f"{self.friendly_host} is password protected.")
-      main.security_help()
+      main.security_help(self)
     return response
 
 
@@ -919,32 +913,21 @@ class Main:
       main.stop_scan()
 
   @staticmethod
-  def security_help():
-    logger.info(f"Please use either command line security (--user | --password) or .netrc.")
-    logger.info(f"for .netrc security create a file called '.netrc' in the tools folder.")
-    logger.info(f"Example.")
-    logger.info(f"machine shelly-50029178B781.local")
-    logger.info(f"login admin")
-    logger.info(f"password fox1")
+  def security_help(device_info=None, mode='Manual'):
+    if mode == 'Manual':
+      logger.info(f"{device_info.friendly_host} is password protected, please check supplied details are correct.")
+      logger.info(f"commandline args are --user | --password")
+    else:
+      logger.info(f"{device_info.friendly_host} is password protected, security in scanner mode is not currently supported.")
+      logger.info(f"unless all devices use same password.")
 
   @staticmethod
-  def get_netrc_login_info(netrc_machine=None):
-    username = 'admin'
-    password = ''
-    netrc_machine = netrc_machine
-    netrc_file = f"{os.path.abspath(os.getcwd())}/.netrc"
-    if os.path.exists(netrc_file):
-      try:
-        info = netrc.netrc(netrc_file).authenticators(netrc_machine)
-        if info is not None:
-          username = info[0]
-          password = info[2]
-          logger.trace(f'[.netrc] username: {username}')
-          logger.trace(f'[.netrc] password: {password}')
-        else:
-          raise netrc.NetrcParseError(f'No authenticators for {netrc_machine}')
-      except (IOError, netrc.NetrcParseError) as err:
-        logger.trace(f'parsing .netrc: {err}')
+  def get_login_info(host=None):
+    username = main.username
+    password = main.password
+    logger.trace(f"[login] host: {host}")
+    logger.trace(f'[login] username: {username}')
+    logger.trace(f'[login] password: {password}')
     return username, password
 
   @staticmethod
@@ -961,7 +944,7 @@ class Main:
     logger.trace(f"{info_type} release_info: {json.dumps(release_info, indent=2)}")
     if not release_info:
       logger.error("")
-      logger.error(f"{RED}Failed to lookup online stock firmware information{NC}")
+      logger.error(f"{RED}Failed to lookup online firmware information{NC}")
       logger.error("For more information please point your web browser to:")
       logger.error("https://github.com/mongoose-os-apps/shelly-homekit/wiki/Flashing#script-fails-to-run")
     return release_info
@@ -1025,8 +1008,7 @@ class Main:
         logger.debug(f"requests.post(url={f'http://{wifi_ip}/rpc/SyS.Reboot'}, auth=HTTPDigestAuth('{self.username}', '{self.password}'))")
         requests.get(url=f'http://{wifi_ip}/rpc/SyS.Reboot', auth=HTTPDigestAuth(self.username, self.password))
       elif response.status_code == 401:
-        logger.info(f"{device_info.friendly_host} is password protected.")
-        self.security_help()
+        self.security_help(device_info)
     else:
       if self.network_type == 'static':
         log_message = f"Configuring static IP to {self.ipv4_ip}..."
@@ -1041,8 +1023,7 @@ class Main:
         logger.trace(response.text)
         logger.info(f"Saved...")
       elif response.status_code == 401:
-        logger.info(f"{device_info.friendly_host} is password protected.")
-        self.security_help()
+        self.security_help(device_info)
 
   def write_hap_setup_code(self, device_info):
     logger.info("Configuring HomeKit setup code...")
@@ -1055,7 +1036,7 @@ class Main:
       logger.info(f"HAP code successfully configured.")
     elif response.status_code == 401:
       logger.info(f"{device_info.friendly_host} is password protected.")
-      self.security_help()
+      self.security_help(device_info)
 
   @staticmethod
   def wait_for_reboot(device_info, before_reboot_uptime=-1, reboot_only=False):
@@ -1241,9 +1222,11 @@ class Main:
           logger.info(f"{WHITE}Mode: {NC}{sys_mode}")
         elif color_mode:
           logger.info(f"{WHITE}Mode: {NC}{color_mode.title()}")
-        logger.info(f"{WHITE}SSID: {NC}{wifi_ssid}")
+        if wifi_ssid:
+          logger.info(f"{WHITE}SSID: {NC}{wifi_ssid}")
         logger.info(f"{WHITE}IP: {NC}{wifi_ip}")
-        logger.info(f"{WHITE}RSSI: {NC}{wifi_rssi}")
+        if wifi_rssi:
+          logger.info(f"{WHITE}RSSI: {NC}{wifi_rssi}")
         if sys_temp:
           logger.info(f"{WHITE}Sys Temp: {NC}{sys_temp}˚c{NC}")
         if str(uptime) != '0:00:00':
@@ -1530,7 +1513,7 @@ class Main:
     for host in self.hosts:
       logger.debug(f"")
       logger.debug(f"{PURPLE}[Manual Hosts] action {host}{NC}")
-      (username, password) = main.get_netrc_login_info(host) if self.password == "" else (self.username, self.password)
+      (username, password) = main.get_login_info(host)
       n = 1
       while n <= self.timeout:
         device_info = Device(host, username, password, no_error_message=True)
@@ -1541,8 +1524,7 @@ class Main:
       if n > self.timeout:
         device_info = Device(host, username, password)
       if device_info.info and device_info.info == 401:
-        logger.info(f"{device_info.friendly_host} is password protected.")
-        self.security_help()
+        self.security_help(device_info)
       elif device_info.info:
         device = {'host': device_info.host, 'username': device_info.username, 'password': device_info.password, 'wifi_ip': device_info.wifi_ip, 'fw_type': device_info.info.get('fw_type'), 'info': device_info.info}
         self.probe_device(device)
@@ -1568,12 +1550,7 @@ class Main:
       logger.debug(f"{PURPLE}[Device Scan] action queue entry{NC}")
       if device_info.info and device_info.info == 401:
         logger.info("")
-        logger.info(f"{device_info.friendly_host} is password protected, .netrc file is required for security in scanner mode.")
-        logger.info(f"please create a file called '.netrc' in the tools folder.")
-        logger.info(f"Example.")
-        logger.info(f"machine shelly-50029178B781.local")
-        logger.info(f"login admin")
-        logger.info(f"password fox1")
+        self.security_help(device_info, 'Scanner')
       elif device_info.info:
         fw_model = device_info.info.get('model') if device_info.is_homekit() else device_info.shelly_model(device_info.info.get('device').get('type'))[0]
         if self.is_fw_type(device_info.info.get('fw_type')) and self.is_model_type(fw_model) and self.is_device_name(device_info.info.get('device_name')):
