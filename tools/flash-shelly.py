@@ -24,7 +24,7 @@ https://github.com/mongoose-os-apps/shelly-homekit/wiki
 
 usage: flash-shelly.py [-h] [--app-version] [-f] [-l] [-m {homekit,keep,revert}] [-i {1,2,3}] [-ft {homekit,stock,all}] [-mt MODEL_TYPE_FILTER] [-dn DEVICE_NAME_FILTER] [-a] [-q] [-e [EXCLUDE ...]] [-n] [-y] [-V VERSION]
                        [--variant VARIANT] [--local-file LOCAL_FILE] [-c HAP_SETUP_CODE] [--ip-type {dhcp,static}] [--ip IPV4_IP] [--gw IPV4_GW] [--mask IPV4_MASK] [--dns IPV4_DNS] [-v {0,1,2,3,4,5}] [--timeout TIMEOUT]
-                       [--log-file LOG_FILENAME] [--reboot] [--config CONFIG] [--save-config SAVE_CONFIG] [--delete-config-file]
+                       [--log-file LOG_FILENAME] [--reboot] [--config CONFIG] [--save-config SAVE_CONFIG] [--user USER] [--password PASSWORD]
                        [hosts ...]
 
 Shelly HomeKit flashing script utility
@@ -75,14 +75,12 @@ optional arguments:
   --config CONFIG       Load options from config file.
   --save-config SAVE_CONFIG
                         Save current options to config file.
-  --delete-config-file  Delete config file.
   --user USER           Enter username for device security (default = admin).
   --password PASSWORD   Enter password for device security.
 """
 
 import argparse
 import atexit
-import configparser
 import datetime
 import functools
 import http.server
@@ -138,6 +136,7 @@ except ImportError:
   from requests.auth import HTTPDigestAuth
 
 app_ver = '2.8.0'
+config_file = 'flashscript.json'
 webserver_port = 8381
 http_server_started = False
 server = None
@@ -221,10 +220,10 @@ class ServiceListener:
       properties = info.properties
       properties = {y.decode('UTF-8'): properties.get(y).decode('UTF-8') for y in properties.keys()}
       logger.trace(f"[Device Scan] found device: {host} added, IP address: {socket.inet_ntoa(info.addresses[0])}")
-      (username, password) = main.get_login_info(host)
       logger.trace(f"[Device Scan] info: {info}")
       logger.trace(f"[Device Scan] properties: {properties}")
       logger.trace("")
+      (username, password) = main.get_security_data(host)
       self.queue.put(Device(host, username, password, socket.inet_ntoa(info.addresses[0])))
 
   @staticmethod
@@ -265,8 +264,7 @@ class Device:
 
   def is_host_reachable(self, host, no_error_message=False):
     # check if host is reachable
-    host_check = re.search(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', host)
-    self.host = f'{host}.local' if '.local' not in host and not host_check else host
+    self.host = main.host_check(host)
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(3)
     if not self.wifi_ip:
@@ -304,25 +302,27 @@ class Device:
       try:
         status_check = requests.get(f'http://{self.wifi_ip}/status', auth=(self.username, self.password), timeout=10)
         if status_check.status_code == 200:
+          fw_type = "stock"
           status = json.loads(status_check.content)
           if status.get('status', '') != '':
             self.info = {}
             return self.info
           fw_info = requests.get(f'http://{self.wifi_ip}/settings', auth=(self.username, self.password), timeout=3)
-          if fw_info.status_code == 401:
-            self.info = 401
-            return 401
-          fw_type = "stock"
           device_url = f'http://{self.wifi_ip}/settings'
         else:
+          fw_type = "homekit"
           fw_info = requests.get(f'http://{self.wifi_ip}/rpc/Shelly.GetInfoExt', auth=HTTPDigestAuth(self.username, self.password), timeout=3)
           device_url = f'http://{self.wifi_ip}/rpc/Shelly.GetInfoExt'
-          if fw_info.status_code == 401 or fw_info.status_code != 200:
+          if fw_info.status_code in (401, 404):
+            logger.debug("Invalid password or security not enabled.")
             fw_info = requests.get(f'http://{self.wifi_ip}/rpc/Shelly.GetInfo', timeout=3)
             device_url = f'http://{self.wifi_ip}/rpc/Shelly.GetInfo'
-          fw_type = "homekit"
       except Exception:
         pass
+      logger.trace(f"status code: {fw_info.status_code}")
+      if fw_info.status_code == 401:
+        self.info = 401
+        return 401
       if fw_info is not None and fw_info.status_code == 200:
         info = json.loads(fw_info.content)
         info['fw_type'] = fw_type
@@ -681,9 +681,77 @@ class Main:
     self.flash_mode = None
     self.zc = None
     self.listener = None
+    self.config_data = {}
+    self.security_data = {}
+    self.defaults_data = {}
+
+  def load_config(self):
+    logger.trace(f"load_config")
+    data = {}
+    if os.path.exists(config_file):
+      with open(config_file) as fp:
+        data = json.load(fp)
+      logger.trace(f"config: {json.dumps(data, indent=2)}")
+    self.config_data = data
+    if self.config_data is not None:
+      self.security_data = self.config_data.get('security', {})
+      self.defaults_data = self.config_data.get('arguments', {})
+
+  def save_config(self):
+    logger.trace(f"save_config")
+    self.config_data['arguments'] = self.defaults_data
+    logger.trace(f"{'defaults_data'}: {json.dumps(self.config_data, indent=2)}")
+    with open(config_file, 'w') as json_file:
+      json.dump(self.config_data, json_file, indent=2)
+
+  def security_help(self, device_info, mode='Manual'):
+    if self.security_data:
+      if self.security_data.get(device_info.host) is None:
+        if mode == 'Manual':
+          logger.info(f"{WHITE}Host: {NC}{device_info.host} {RED}is password protected{NC}")
+          logger.info(f"{device_info.host} is not found in '{config_file}' config file,")
+          logger.info(f"please add or use commandline args --user | --password")
+        else:
+          logger.info(f"{WHITE}Host: {NC}{device_info.host} {RED}is password protected{NC}")
+          logger.info(f"'{config_file}' security file is required in scanner mode.")
+          logger.info(f"unless all devices use same password.{NC}")
+      else:
+        logger.info(f"{WHITE}Host: {NC}{device_info.host} {RED}Invalid user or password found in '{config_file}'{NC}")
+        logger.info(f"please check supplied details are correct.")
+        logger.info(f"username: {self.security_data.get(device_info.host).get('user')}")
+        logger.info(f"password: {self.security_data.get(device_info.host).get('password')}{NC}")
+    else:
+      example_dict = {'security_data': {"shelly-AF0183.local": {"user": "admin", "password": "abc123"}}}
+      logger.info(f"{WHITE}Host: {NC}{device_info.host} {RED}is password protected{NC}")
+      logger.info(f"Please use either command line security (--user | --password) or '{config_file}'")
+      logger.info(f"for '{config_file}', create a file called '{config_file}' in tools folder")
+      logger.info(f"{WHITE}Example {config_file}:{NC}")
+      logger.info(f"{YELLOW}{json.dumps(example_dict, indent=2)}{NC}")
+
+  def get_security_data(self, host):
+    host = self.host_check(host)
+    if not self.password and self.security_data.get(host):
+      username = self.security_data.get(host).get('user')
+      password = self.security_data.get(host).get('password')
+    else:
+      username = main.username
+      password = main.password
+    logger.debug(f"[login] {host} {self.security_data.get(host)}")
+    logger.debug(f"[login] username: {username}")
+    logger.debug(f"[login] password: {password}")
+    return username, password
 
   @staticmethod
-  def parse_config(args, parser):
+  def host_check(host):
+    host_check = re.search(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', host)
+    return f'{host}.local' if '.local' not in host and not host_check else host
+
+  def get_defaults_data(self, host):
+    if self.config_data:
+      self.defaults_data = self.config_data.get('arguments')
+      logger.debug(f"{host}: {self.defaults_data.get(host)}")
+
+  def parse_config(self, args, parser):
     if args.config and args.save_config:
       logger.info(f"Invalid option config or save-config not together.")
       parser.print_help()
@@ -691,46 +759,41 @@ class Main:
 
     arg_list = vars(args)
     logger.trace(f"default args: {arg_list}")
-    config_file = '.flashrc'
-    config = configparser.ConfigParser()
     if args.save_config:
-      logger.info(f'Saved configuration section {args.save_config} to {config_file}')
-      config.read(config_file)
-      if config.has_section(args.save_config):
-        config.remove_section(args.save_config)
-      config.add_section(args.save_config)
+      y = {}
       for x in arg_list:
-        if x in ('config', 'save_config', 'app_version', 'flash'):
+        if x in ('config', 'save_config', 'app_version', 'flash', 'user', 'password'):
           continue
         if x == 'hosts' and arg_list[x]:
-          h = re.sub(r"[\[\]',]", "", str(arg_list[x]))
-          config.set(args.save_config, x, str(h))
+          y[x] = re.sub(r"[\[\]',]", "", str(arg_list[x]))
         else:
-          config.set(args.save_config, x, str(arg_list[x]))
-      with open(config_file, "w") as file_object:
-        config.write(file_object)
+          y[x] = arg_list[x]
+      self.defaults_data[args.save_config] = y
+      self.save_config()
+      logger.info(f"Saved configuration {args.save_config} to {config_file}")
       sys.exit(0)
-    elif os.path.exists(config_file):
-      config.read(config_file)
-      logger.debug(f"sections: {config.sections()}")
-      if not args.config and config.has_section('default'):
+    elif self.defaults_data:
+      config = None
+      if not args.config and self.defaults_data.get('default'):
+        config = self.defaults_data.get('default')
         args.config = 'default'
-      if args.config and not config.has_section(args.config):
+      elif args.config and not self.defaults_data.get(args.config):
         logger.info(f"Configuration '{args.config}' not found")
         sys.exit(1)
-      logger.info(f'Reading configuration section {args.config} from {config_file}')
-      parser.set_defaults(list=config.getboolean(args.config, 'list'), mode=config.get(args.config, 'mode'), info_level=config.getint(args.config, 'info_level'),
-                          fw_type_filter=config.get(args.config, 'fw_type_filter'), model_type_filter=config.get(args.config, 'model_type_filter'),
-                          device_name_filter=config.get(args.config, 'device_name_filter'), do_all=config.getboolean(args.config, 'do_all'), quiet_run=config.getboolean(args.config, 'quiet_run'),
-                          exclude=config.get(args.config, 'exclude'), dry_run=config.getboolean(args.config, 'dry_run'), silent_run=config.getboolean(args.config, 'silent_run'),
-                          version=config.get(args.config, 'version'), variant=config.get(args.config, 'variant'), local_file=config.get(args.config, 'local_file'),
-                          hap_setup_code=config.get(args.config, 'hap_setup_code'), network_type=config.get(args.config, 'network_type'), ipv4_ip=config.get(args.config, 'ipv4_ip'),
-                          ipv4_gw=config.get(args.config, 'ipv4_gw'), ipv4_mask=config.get(args.config, 'ipv4_mask'), ipv4_dns=config.get(args.config, 'ipv4_dns'),
-                          verbose=config.getint(args.config, 'verbose'), timeout=config.get(args.config, 'timeout'), log_filename=config.get(args.config, 'log_filename'),
-                          reboot=config.getboolean(args.config, 'reboot'), hosts=config.get(args.config, 'hosts').split())
-      args = parser.parse_args()
-      arg_list = vars(args)
-      logger.trace(f"Loaded config: {arg_list}")
+      elif args.config and self.defaults_data.get(args.config):
+        config = self.defaults_data.get(args.config)
+      if config is not None:
+        logger.info(f"Reading configuration {args.config} from {config_file}")
+        parser.set_defaults(list=config.get('list'), mode=config.get('mode'), info_level=config.get('info_level'), fw_type_filter=config.get('fw_type_filter'),
+                            model_type_filter=config.get('model_type_filter'), device_name_filter=config.get('device_name_filter'), do_all=config.get('do_all'),
+                            quiet_run=config.get('quiet_run'), exclude=config.get('exclude'), dry_run=config.get('dry_run'), silent_run=config.get('silent_run'),
+                            version=config.get('version'), variant=config.get('variant'), local_file=config.get('local_file'), hap_setup_code=config.get('hap_setup_code'),
+                            network_type=config.get('network_type'), ipv4_ip=config.get('ipv4_ip'), ipv4_gw=config.get('ipv4_gw'), ipv4_mask=config.get('ipv4_mask'),
+                            ipv4_dns=config.get('ipv4_dns'), verbose=config.get('verbose'), timeout=config.get('timeout'), log_filename=config.get('log_filename'),
+                            reboot=config.get('reboot'), hosts=config.get('hosts').split())
+        args = parser.parse_args()
+        arg_list = vars(args)
+        logger.trace(f"Loaded config: {arg_list}")
     return args
 
   def run_app(self):
@@ -777,6 +840,7 @@ class Main:
       logger.info(f"Version: {app_ver}")
       sys.exit(0)
 
+    self.load_config()
     args = self.parse_config(args, parser)
 
     if args.flash:
@@ -915,24 +979,6 @@ class Main:
       logger.info(f"{NC}")
     except KeyboardInterrupt:
       main.stop_scan()
-
-  @staticmethod
-  def security_help(device_info=None, mode='Manual'):
-    if mode == 'Manual':
-      logger.info(f"{device_info.friendly_host} is password protected, please check supplied details are correct.")
-      logger.info(f"commandline args are --user | --password")
-    else:
-      logger.info(f"{device_info.friendly_host} is password protected, security in scanner mode is not currently supported.")
-      logger.info(f"unless all devices use same password.")
-
-  @staticmethod
-  def get_login_info(host=None):
-    username = main.username
-    password = main.password
-    logger.trace(f"[login] host: {host}")
-    logger.trace(f'[login] username: {username}')
-    logger.trace(f'[login] password: {password}')
-    return username, password
 
   @staticmethod
   def get_release_info(info_type):
@@ -1518,7 +1564,7 @@ class Main:
     for host in self.hosts:
       logger.debug(f"")
       logger.debug(f"{PURPLE}[Manual Hosts] action {host}{NC}")
-      (username, password) = main.get_login_info(host)
+      (username, password) = main.get_security_data(host)
       n = 1
       while n <= self.timeout:
         device_info = Device(host, username, password, no_error_message=True)
