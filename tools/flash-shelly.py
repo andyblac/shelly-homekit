@@ -137,7 +137,7 @@ except ImportError:
   import requests
   from requests.auth import HTTPDigestAuth
 
-app_ver = "2.8.0"
+app_ver = '2.8.0'
 webserver_port = 8381
 http_server_started = False
 server = None
@@ -147,10 +147,10 @@ upgradeable_devices = 0
 flashed_devices = 0
 failed_flashed_devices = 0
 arch = platform.system()
-stock_info_url = "https://api.shelly.cloud/files/firmware"
+stock_info_url = 'https://api.shelly.cloud/files/firmware'
 stock_release_info = None
 tried_to_get_remote_homekit = False
-homekit_info_url = "https://rojer.me/files/shelly/update.json"
+homekit_info_url = 'https://rojer.me/files/shelly/update.json'
 homekit_release_info = None
 tried_to_get_remote_stock = False
 flash_question = None
@@ -221,10 +221,10 @@ class ServiceListener:
       properties = info.properties
       properties = {y.decode('UTF-8'): properties.get(y).decode('UTF-8') for y in properties.keys()}
       logger.trace(f"[Device Scan] found device: {host} added, IP address: {socket.inet_ntoa(info.addresses[0])}")
-      logger.trace(f'[Device Scan] info: {info}')
-      logger.trace(f'[Device Scan] properties: {properties}')
-      logger.trace('')
       (username, password) = main.get_login_info(host)
+      logger.trace(f"[Device Scan] info: {info}")
+      logger.trace(f"[Device Scan] properties: {properties}")
+      logger.trace("")
       self.queue.put(Device(host, username, password, socket.inet_ntoa(info.addresses[0])))
 
   @staticmethod
@@ -370,13 +370,13 @@ class Device:
   def get_uptime(self, no_error_message=False):
     uptime = -1
     if not self.get_device_info(True, no_error_message):
-      logger.trace(f'get_uptime: -1')
+      logger.trace(f"get_uptime: -1")
       return -1
     if self.is_homekit():
       uptime = self.info.get('uptime', -1)
     elif self.is_stock():
       uptime = self.info.get('status', {}).get('uptime', -1)
-    logger.trace(f'get_uptime: {uptime}')
+    logger.trace(f"get_uptime: {uptime}")
     time.sleep(1)  # wait for time check to fall behind
     return uptime
 
@@ -907,12 +907,12 @@ class Main:
       else:
         self.device_scan()
     except Exception:
-      logger.info(f'{RED}')
-      logger.info(f'flash-shelly version: {app_ver}')
+      logger.info(f"{RED}")
+      logger.info(f"flash-shelly version: {app_ver}")
       logger.info("Try to update your script, maybe the bug is already fixed!")
       exc_type, exc_value, exc_traceback = sys.exc_info()
       traceback.trace_exception(exc_type, exc_value, exc_traceback, file=sys.stdout)
-      logger.info(f'{NC}')
+      logger.info(f"{NC}")
     except KeyboardInterrupt:
       main.stop_scan()
 
